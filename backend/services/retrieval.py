@@ -12,11 +12,15 @@ def query_chunks(repo_id: str, question: str, top_k: int = 5) -> List[Dict[str, 
     except Exception:
         return []
 
+    count = collection.count()
+    if count == 0:
+        return []
+
     question_embedding = _embed(question)
 
     results = collection.query(
         query_embeddings=[question_embedding],
-        n_results=min(top_k, collection.count()),
+        n_results=min(top_k, count),
         include=["documents", "metadatas", "distances"],
     )
 

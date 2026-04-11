@@ -47,6 +47,7 @@ def get_repos():
 
 
 @router.delete("/repos/{repo_id}")
+
 def delete_repo(repo_id: str):
     from services.ingestion import get_chroma_client
     client = get_chroma_client()
@@ -55,3 +56,5 @@ def delete_repo(repo_id: str):
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"deleted": repo_id}
+
+

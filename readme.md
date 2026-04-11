@@ -125,16 +125,16 @@ Easy Onboarding lets developers **ingest any codebase** (local folder or GitHub 
             │
    ┌────────▼────────┐   ┌──────────────┐
    │    ChromaDB      │   │    Ollama     │
-   │   (vectors +     │──▶│ deepseek-    │
-   │    metadata)     │   │ coder +      │
+   │   (vectors +     │──▶│ qwen2.5-     │
+   │    metadata)     │   │ coder:1.5b + │
    └──────────────────┘   │ nomic-embed  │
                           └──────────────┘
 ```
 
 ### How It Works
 
-1. **Ingest** → `POST /ingest` walks the repo, chunks code by function/class, embeds each chunk with `nomic-embed-text`, and stores vectors + metadata (file path, line numbers, language) in ChromaDB.
-2. **Ask** → `POST /chat` takes your question, retrieves the top-K most relevant chunks from ChromaDB, injects them into a prompt, and streams an answer from `deepseek-coder` via Ollama — with citations.
+1. **Ingest** → `POST /api/ingest` walks the repo, splits code into 60-line overlapping chunks, embeds each with `nomic-embed-text`, and stores vectors + metadata (file path, line numbers) in ChromaDB.
+2. **Ask** → `POST /api/chat` embeds your question, retrieves the top-5 most relevant chunks from ChromaDB, builds a prompt with the code context, and streams an answer from `qwen2.5-coder` via Ollama — with file:line citations.
 
 ---
 
@@ -142,13 +142,12 @@ Easy Onboarding lets developers **ingest any codebase** (local folder or GitHub 
 
 | Layer          | Technology                                                         | Why                      |
 | -------------- | ------------------------------------------------------------------ | ------------------------ |
-| **LLM**        | [Ollama](https://ollama.ai) + `deepseek-coder`                     | Code-aware local LLM     |
+| **LLM**        | [Ollama](https://ollama.ai) + `qwen2.5-coder:1.5b` (default)      | Code-aware local LLM     |
 | **Embeddings** | `nomic-embed-text` via Ollama                                      | Free, runs locally       |
 | **Vector DB**  | [ChromaDB](https://www.trychroma.com)                              | Simple, no server needed |
-| **RAG**        | [LangChain](https://langchain.com)                                 | Chunking + retrieval     |
-| **Backend**    | [FastAPI](https://fastapi.tiangolo.com)                            | Streaming chat API       |
-| **Frontend**   | [Next.js](https://nextjs.org) + [shadcn/ui](https://ui.shadcn.com) | Clean chat UI            |
-| **Deployment** | [Docker Compose](https://docs.docker.com/compose/)                 | One command setup        |
+| **Backend**    | [FastAPI](https://fastapi.tiangolo.com) (Python 3.11)              | Streaming chat API       |
+| **Frontend**   | [Next.js 15](https://nextjs.org) + Tailwind CSS                    | Clean chat UI            |
+| **Deployment** | [Docker Compose](https://docs.docker.com/compose/) v2              | One command setup        |
 
 ---
 
@@ -169,30 +168,40 @@ git clone https://github.com/yourusername/easy-onboarding.git
 cd easy-onboarding
 ```
 
-### 2. Configure environment
+### 2. Start everything
 
 ```bash
-cp .env.example .env
+docker compose up --build
 ```
 
-Edit `.env` if you want to customize model names, chunk sizes, or ports.
+Wait until you see both of these lines:
 
-### 3. Start everything
+```
+backend-1   | INFO:     Application startup complete.
+frontend-1  | ✓ Ready in ...
+```
+
+### 3. Pull the AI models (required — one time only)
+
+Open a **new terminal** and run:
 
 ```bash
-docker-compose up
+# Embedding model (~274 MB)
+docker exec -it easy-onboarding-ollama-1 ollama pull nomic-embed-text
+
+# Code LLM (~1.3 GB — fast on CPU)
+docker exec -it easy-onboarding-ollama-1 ollama pull qwen2.5-coder:1.5b
 ```
 
-This will:
+Wait for `success` on both before using the app. Verify:
 
-- Pull Ollama models (`deepseek-coder` + `nomic-embed-text`)
-- Start ChromaDB
-- Launch the FastAPI backend
-- Serve the Next.js frontend
+```bash
+docker exec -it easy-onboarding-ollama-1 ollama list
+```
 
 ### 4. Open the app
 
-Navigate to **[http://localhost:3000](http://localhost:3000)** and start asking questions!
+Navigate to **[http://localhost:3000](http://localhost:3000)**
 
 ---
 
@@ -210,19 +219,29 @@ Navigate to **[http://localhost:3000](http://localhost:3000)** and start asking 
 **Ingest a local codebase:**
 
 ```bash
-curl -X POST "http://localhost:8000/ingest?repo_path=./my-repo"
+curl -X POST http://localhost:8000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"repo_path": "/path/to/repo", "repo_id": "my-repo"}'
 ```
 
 **Ingest from GitHub:**
 
 ```bash
-curl -X POST "http://localhost:8000/ingest?repo_url=https://github.com/user/repo"
+curl -X POST http://localhost:8000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"repo_path": "https://github.com/user/repo", "repo_id": "my-repo"}'
+```
+
+**List indexed repos:**
+
+```bash
+curl http://localhost:8000/api/repos
 ```
 
 **Ask a question:**
 
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{"question": "How does authentication work?", "repo_id": "my-repo"}'
 ```
@@ -243,18 +262,20 @@ curl -X POST http://localhost:8000/chat \
 
 All settings live in `.env`:
 
-| Variable          | Default               | Description                          |
-| ----------------- | --------------------- | ------------------------------------ |
-| `LLM_MODEL`       | `deepseek-coder`      | Ollama model for code Q&A            |
-| `EMBED_MODEL`     | `nomic-embed-text`    | Ollama model for embeddings          |
-| `CHUNK_SIZE`      | `1000`                | Characters per code chunk            |
-| `CHUNK_OVERLAP`   | `200`                 | Overlap between adjacent chunks      |
-| `TOP_K`           | `5`                   | Number of chunks retrieved per query |
-| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama server URL                    |
-| `CHROMA_HOST`     | `chromadb`            | ChromaDB host                        |
-| `CHROMA_PORT`     | `8000`                | ChromaDB port                        |
-| `BACKEND_PORT`    | `8000`                | FastAPI server port                  |
-| `FRONTEND_PORT`   | `3000`                | Next.js dev server port              |
+| Variable          | Default                  | Description                             |
+| ----------------- | ------------------------ | --------------------------------------- |
+| `CHAT_MODEL`      | `qwen2.5-coder:1.5b`     | Ollama model for code Q&A               |
+| `EMBED_MODEL`     | `nomic-embed-text`       | Ollama model for embeddings             |
+| `OLLAMA_BASE_URL` | `http://ollama:11434`    | Ollama server URL (inside Docker)       |
+| `CHROMA_HOST`     | `chromadb`               | ChromaDB host (inside Docker)           |
+| `CHROMA_PORT`     | `8000`                   | ChromaDB port (inside Docker)           |
+
+**Chunk tuning** (edit `backend/services/ingestion.py`):
+
+| Constant        | Default | Description                    |
+| --------------- | ------- | ------------------------------ |
+| `CHUNK_SIZE`    | `60`    | Lines per code chunk           |
+| `CHUNK_OVERLAP` | `10`    | Overlapping lines between chunks |
 
 ### Supported File Extensions
 
@@ -288,8 +309,8 @@ npm run dev
 
 ```bash
 ollama serve
-ollama pull deepseek-coder
 ollama pull nomic-embed-text
+ollama pull qwen2.5-coder:1.5b
 ```
 
 ### Run tests
@@ -304,19 +325,38 @@ pytest tests/ -v
 ## 🐛 Troubleshooting
 
 <details>
-<summary><strong>Ollama models not downloading</strong></summary>
+<summary><strong>Cannot connect to Docker daemon</strong></summary>
 
-Make sure the Ollama container has internet access. Check logs:
+Docker Desktop isn't running. Open it from Applications and wait for the whale icon in the menu bar to become steady, then re-run `docker compose up --build`.
+
+</details>
+
+<details>
+<summary><strong>Models not found / 404 from Ollama</strong></summary>
+
+Models must be pulled manually after starting the stack — they are not auto-downloaded. Run:
 
 ```bash
-docker-compose logs ollama
+docker exec -it easy-onboarding-ollama-1 ollama pull nomic-embed-text
+docker exec -it easy-onboarding-ollama-1 ollama pull qwen2.5-coder:1.5b
 ```
 
-You can also manually pull models:
+Verify they are loaded before using the app:
 
 ```bash
-docker exec -it ollama ollama pull deepseek-coder
-docker exec -it ollama ollama pull nomic-embed-text
+docker exec -it easy-onboarding-ollama-1 ollama list
+```
+
+</details>
+
+<details>
+<summary><strong>Build error: /app/public not found</strong></summary>
+
+The `frontend/public/` directory must exist before building:
+
+```bash
+mkdir -p frontend/public
+docker compose up --build frontend
 ```
 
 </details>
@@ -324,22 +364,29 @@ docker exec -it ollama ollama pull nomic-embed-text
 <details>
 <summary><strong>Out of memory errors</strong></summary>
 
-`deepseek-coder` requires ~4 GB RAM. If you're running low:
+`qwen2.5-coder:1.5b` needs ~2 GB RAM. If you're running low:
 
+- Increase Docker's memory limit (Docker Desktop → Settings → Resources → Memory)
 - Close other heavy applications
-- Use a smaller model variant: set `LLM_MODEL=deepseek-coder:6.7b` in `.env`
-- Increase Docker's memory allocation (Docker Desktop → Settings → Resources)
+
+To use an even smaller model, pull it and update `.env`:
+
+```bash
+docker exec -it easy-onboarding-ollama-1 ollama pull tinyllama
+# then in .env: CHAT_MODEL=tinyllama
+docker compose restart backend
+```
 
 </details>
 
 <details>
 <summary><strong>ChromaDB connection refused</strong></summary>
 
-Ensure ChromaDB is running and healthy:
+Check that ChromaDB is healthy:
 
 ```bash
-docker-compose ps
-curl http://localhost:8000/api/v1/heartbeat
+docker compose ps
+curl http://localhost:8001/api/v1/heartbeat
 ```
 
 </details>
@@ -349,9 +396,50 @@ curl http://localhost:8000/api/v1/heartbeat
 
 Large repos take time to chunk and embed. Tips:
 
-- Add non-essential directories to `.gitignore` or a `.onboardingignore` file
-- Reduce `CHUNK_SIZE` for faster (but less contextual) embeddings
-- The first ingestion is slowest — re-indexing is faster
+- Target a subdirectory instead of the whole repo
+- The first ingestion is slowest — re-indexing skips unchanged collections
+- Reduce `CHUNK_SIZE` in `backend/services/ingestion.py` for faster (but less contextual) embeddings
+
+</details>
+
+<details>
+<summary><strong>Indexing a local folder from your machine</strong></summary>
+
+The backend container only sees paths mounted into it. Add a volume in `docker-compose.yml`:
+
+```yaml
+backend:
+  volumes:
+    - ./backend:/app
+    - /path/to/your/project:/repos/my-project   # add this
+```
+
+Then use `/repos/my-project` as the repo path in the UI and rebuild:
+
+```bash
+docker compose up --build backend
+```
+
+</details>
+
+<details>
+<summary><strong>Swapping the LLM</strong></summary>
+
+Any model from [ollama.com/library](https://ollama.com/library) works. Pull it, update `.env`, restart:
+
+```bash
+docker exec -it easy-onboarding-ollama-1 ollama pull deepseek-coder:6.7b
+# in .env: CHAT_MODEL=deepseek-coder:6.7b
+docker compose restart backend
+```
+
+**Recommended models by RAM:**
+
+| RAM   | Model                    | Size   |
+|-------|--------------------------|--------|
+| 8 GB  | `qwen2.5-coder:1.5b`     | 1.3 GB |
+| 16 GB | `deepseek-coder:6.7b`    | 3.8 GB |
+| 32 GB | `deepseek-coder:33b`     | 19 GB  |
 
 </details>
 

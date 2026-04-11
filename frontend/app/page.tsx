@@ -66,11 +66,21 @@ export default function Home() {
     if (!question.trim() || !repoId || streaming) return;
     const q = question.trim();
     setQuestion("");
-    setMessages((prev) => [...prev, { role: "user", text: q }]);
     setStreaming(true);
 
-    const assistantIdx = messages.length + 1;
-    setMessages((prev) => [...prev, { role: "assistant", text: "", citations: [] }]);
+    // Add both messages atomically so the index is always last element
+    let assistantIdx = -1;
+    setMessages((prev) => {
+      assistantIdx = prev.length + 1;
+      return [
+        ...prev,
+        { role: "user" as const, text: q },
+        { role: "assistant" as const, text: "", citations: [] },
+      ];
+    });
+
+    // Wait one tick for state to flush before reading assistantIdx
+    await new Promise((r) => setTimeout(r, 0));
 
     try {
       const res = await fetch("/api/chat", {
@@ -79,7 +89,11 @@ export default function Home() {
         body: JSON.stringify({ question: q, repo_id: repoId }),
       });
 
-      const reader = res.body!.getReader();
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
 
@@ -92,7 +106,8 @@ export default function Home() {
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          const payload = JSON.parse(line.slice(6));
+          let payload: { type: string; text?: string; citations?: Citation[] };
+          try { payload = JSON.parse(line.slice(6)); } catch { continue; }
 
           if (payload.type === "citations") {
             setMessages((prev) => {
@@ -112,10 +127,13 @@ export default function Home() {
           }
         }
       }
-    } catch {
+    } catch (e) {
       setMessages((prev) => {
         const updated = [...prev];
-        updated[assistantIdx] = { ...updated[assistantIdx], text: "Error: could not reach backend." };
+        updated[assistantIdx] = {
+          ...updated[assistantIdx],
+          text: `Error: ${e instanceof Error ? e.message : "could not reach backend."}`,
+        };
         return updated;
       });
     } finally {

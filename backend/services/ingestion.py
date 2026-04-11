@@ -68,8 +68,8 @@ def _embed(text: str) -> List[float]:
     model = os.getenv("EMBED_MODEL", "nomic-embed-text")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     client = ollama.Client(host=base_url)
-    response = client.embeddings(model=model, prompt=text)
-    return response["embedding"]
+    response = client.embed(model=model, input=text)
+    return response["embeddings"][0]
 
 
 def ingest_repo(repo_path: str, repo_id: str) -> Dict[str, Any]:
